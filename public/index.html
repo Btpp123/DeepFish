@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepFish · 鳕鱼算棋，DeepSeek 讲棋</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <header>
+    <h1>🐟 DeepFish</h1>
+    <p class="subtitle" id="subtitle">鳕鱼算棋 · DeepSeek 讲棋</p>
+  </header>
+
+  <main>
+    <!-- ========== 左边：局势条 + 棋盘 + 评估曲线 ========== -->
+    <section class="left">
+
+      <div class="board-row">
+        <!-- 局势条：白色块越大 = 白方越优。棋盘翻过去时也跟着翻。 -->
+        <div id="evalBar" class="evalbar"></div>
+        <div id="board" class="board"></div>
+      </div>
+
+      <!-- 双方已经吃掉的子 + 吃子价值差。纯子力账，和鳕鱼、DeepSeek 都没有关系。 -->
+      <div id="ledger" class="ledger"></div>
+
+      <!-- 直接在棋盘上走棋时的一行提示：轮到谁走 / 选中了哪个子 / 有几个落点 -->
+      <div id="playHint" class="play-hint"></div>
+
+      <!-- 升变选择。兵走到对方底线时才弹出来 —— 不选就没法确定升成什么。 -->
+      <div id="promoPicker" class="promo-picker" hidden>
+        <span class="promo-title">这个兵升变成：</span>
+        <button data-promo="q" class="ghost">后</button>
+        <button data-promo="r" class="ghost">车</button>
+        <button data-promo="b" class="ghost">象</button>
+        <button data-promo="n" class="ghost">马</button>
+        <button id="btnCancelPromo" class="ghost tiny">取消</button>
+      </div>
+
+      <!-- 翻页按钮
+           ⚠️ 它和下面那个「让鳕鱼分析」必须紧跟棋盘 ——
+              曲线面板和状态行都排在它们**后面**。
+              原因：曲线一开，整列高度就超过一屏，翻页按钮会被推到折叠线以下
+              （用户的原话："要点下一步和让鳕鱼分析都必须要从最上端往下翻页一点点"）。
+              翻页是复盘时点得最多的东西，任何情况下都不该需要先滚动。 -->
+      <div class="nav">
+        <button id="btnFirst" title="回到开局（键盘 Home）">⏮ 开局</button>
+        <button id="btnPrev"  title="上一步（键盘 ←）">◀ 上一步</button>
+        <button id="btnNext"  title="下一步（键盘 →）">下一步 ▶</button>
+        <button id="btnLast"  title="跳到结尾（键盘 End）">结尾 ⏭</button>
+      </div>
+
+      <!-- 手动分析。
+           摆在翻页按钮正下方是有意的：翻页和「算这一步」是同一件事的两半，
+           手不用在左右两栏之间来回跑。以前它在右边那张卡片里，
+           翻完页得把眼睛挪到另一栏去找按钮。
+           （键盘 Enter 也是这个按钮） -->
+      <div class="analyze-row">
+        <button id="btnAnalyze" class="primary" disabled>🐟 让鳕鱼分析</button>
+        <label class="hint">思考深度
+          <select id="depthSelect">
+            <option value="12">12 · 最快</option>
+            <option value="16" selected>16 · 推荐</option>
+            <option value="18">18</option>
+            <option value="20">20 · 最慢</option>
+          </select>
+        </label>
+      </div>
+
+      <!-- 评估曲线：横轴是步数，上方是白优、下方是黑优。点一下能跳过去。
+           它是一整块图，最占地方，所以排在翻页按钮后面。 -->
+      <div id="evalPanel" class="eval-panel">
+        <div class="eval-panel-head">
+          <span class="eval-panel-title">局势曲线</span>
+          <span id="evalProgress" class="eval-progress"></span>
+          <span class="eval-legend">
+            <i class="lg-white"></i>白优　<i class="lg-black"></i>黑优　（点曲线可跳转）
+          </span>
+        </div>
+        <div id="evalCurve" class="eval-curve"></div>
+      </div>
+
+      <div class="under-board">
+        <div id="status" class="status">轮到白方走</div>
+        <div class="under-right">
+          <span id="moveCounter" class="counter">开局 · 共 0 步</span>
+          <button id="btnFlip" class="ghost tiny" title="翻转棋盘（键盘 F）">⇅ 翻转</button>
+        </div>
+      </div>
+
+      <!-- 棋谱自带的评注（lichess 导出的棋谱里就有引擎评分和时间） -->
+      <div id="moveNote" class="move-note empty"></div>
+    </section>
+
+    <!-- ========== 右边：棋谱、着法、分析结果、设置 ==========
+         顺序是有讲究的：
+           1. 载入棋谱 —— 每盘棋只用一次
+           2. 着法     —— 翻页时一直在用的主控件，必须最先够得着
+           3. 分析结果 —— 结果块高度会从 1 行涨到十几行，
+                          排在着法**后面**就不会把着法列表往下推
+           4. 显示设置 —— 最少碰的东西，放最后
+
+         注意：「让鳕鱼分析」那个按钮**不在这里**，它在左栏翻页按钮的下方
+         （翻页和算棋是连着做的两个动作，放一起才顺手）。
+         这一栏只负责把结果摊开给你看。
+    -->
+    <section class="right">
+
+      <!-- ---------- 载入棋谱 ---------- -->
+      <div class="card">
+        <h2>载入棋谱</h2>
+        <textarea id="pgnInput" rows="3"
+          placeholder="把 PGN 棋谱粘贴到这里，例如：&#10;1. e4 e5 2. Nf3 Nc6 3. Bb5 a6"></textarea>
+
+        <div class="row">
+          <button id="btnLoad" class="primary">载入棋谱</button>
+          <span class="hint">或者试试：</span>
+          <button data-sample="fool"    class="ghost">愚人将杀</button>
+          <button data-sample="scholar" class="ghost">学者将杀</button>
+          <button data-sample="opera"   class="ghost">歌剧院之局</button>
+          <!-- 三个"大"样例：开发和验收一直用它们，所以给固定编号。
+               按钮上只写编号（不写平台名），来源和看点都放在悬停提示里。 -->
+          <button data-sample="sample1" class="ghost hl"
+            title="样例一：一盘真实对局（51 步，来源 lichess）。每一步都带引擎评分和剩余时间，还有 20 多处变着分支 —— 用来试各种功能最顺手。项目里很多次排错用的就是它（9.Qd2 那步）。">样例一</button>
+          <button data-sample="sample2" class="ghost hl"
+            title="样例二：一盘短对局（31 步，来源国象联盟）。第 10 手白方短易位是个取舍（引擎给分和另一手几乎相同），第 16 手是升变成马将杀 —— 用来看「吃子栏」和「讲棋会不会把取舍说成漏着」最合适。">样例二</button>
+          <button data-sample="sample3" class="ghost hl"
+            title="样例三：一盘 102 步的残局拉锯（来源 lichess）。最后 20 步几乎是纯王兵残局 —— 第 50 手 50.Kh5 是「王不能吃被对方保护的子」的典型，用来看残局讲解最合适。">样例三</button>
+        </div>
+
+        <div id="message" class="message"></div>
+
+        <!-- 换盘前的拦一下：棋盘上还有没导出的支线时，不直接载入，先问一句。
+             用页内提示而不是浏览器原生 confirm，一是能写清"会丢什么"，
+             二是 jsdom 里 confirm 是没实现的，页内提示才测得了。 -->
+        <div id="loadGuard" class="load-guard" hidden>
+          <span>你在棋盘上走过支线，还没导出 —— 载入新棋谱会把它们丢掉。</span>
+          <div class="row">
+            <button id="btnGuardExport" class="ghost">先去导出</button>
+            <button id="btnGuardDiscard" class="ghost tiny">仍然载入（放弃支线）</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- 着法列表 ---------- -->
+      <div class="card">
+        <h2>着法</h2>
+        <div id="movesWrap" class="moves-wrap">
+          <table class="moves">
+            <thead>
+              <tr><th>#</th><th>白</th><th>黑</th></tr>
+            </thead>
+            <tbody id="movesBody"></tbody>
+          </table>
+        </div>
+
+        <!-- ---------- 你走的支线 ----------
+             原棋谱一步不改（见 app.js 里"支线"那一段的说明）。
+             只有真的在棋盘上走过棋，这一块才出现。 -->
+        <div id="branchBlock" class="branch-block" hidden>
+          <div class="branch-toolbar">
+            <span class="branch-title">✎ 你走的支线</span>
+            <button id="btnBackToMain" class="ghost tiny" title="回到原棋谱那条线。翻页按钮（开局/上一步/下一步/结尾）和键盘只在**当前这条线**里走——站在支线上时按「开局」到的是支线的起点，不是这盘棋的开局，所以给你一个出口。点主线上的着法也能回去。">↩ 回到主线</button>
+            <button id="btnExportPgn" class="ghost tiny">⬇ 导出棋谱</button>
+            <button id="btnUndoMove" class="ghost tiny" title="撤销你走的最后一步（原棋谱不改，所以主线不能悔棋）">↶ 悔棋</button>
+            <button id="btnClearBranches" class="ghost tiny">✕ 清空支线</button>
+          </div>
+          <div id="branchList" class="branch-list"></div>
+        </div>
+
+        <!-- 导出面板：给一个可复制的文本框 + 下载按钮 -->
+        <div id="exportPanel" class="export-panel" hidden>
+          <div class="export-head">
+            <b>导出棋谱</b>
+            <span class="hint">主线（原棋谱）+ 你走的支线，支线写成标准 PGN 变着 <code>( ... )</code></span>
+          </div>
+          <textarea id="exportText" class="export-text" rows="10" spellcheck="false"></textarea>
+          <div class="row">
+            <button id="btnDownloadPgn" class="primary">⬇ 下载 .pgn</button>
+            <button id="btnCopyPgn" class="ghost">复制到剪贴板</button>
+            <button id="btnCloseExport" class="ghost tiny">关闭</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- 分析结果 ---------- -->
+      <div class="card">
+        <h2>分析结果 <span class="tag" id="engineTag">检测中…</span></h2>
+
+        <div id="analysisBody" class="analysis">
+          <p class="hint">这一块只显示<strong>你按按钮</strong>要来的结果，不会自己冒出来 ——
+            后台那轮整局扫描只喂曲线和局势条，不许往这里写字。<br>
+            翻到某一步，点棋盘下方那个「🐟 让鳕鱼分析」就行。</p>
+        </div>
+
+        <!-- ---------- DeepSeek 讲解 ----------
+             它排在鳕鱼结果**下面**，因为两者有先后关系：
+             先有鳕鱼算出来的事实，才谈得上讲解。
+             数字全部来自上面的结果，模型只负责解释为什么会这样 ——
+             详见 src/coach.js 开头。 -->
+        <div class="coach">
+          <div class="coach-head">
+            <button id="btnExplain" class="ghost coach-btn" disabled>🤖 让 DeepSeek 讲讲</button>
+            <span class="tag" id="llmTag">检测中…</span>
+          </div>
+          <div id="coachBody" class="coach-body"></div>
+        </div>
+      </div>
+
+      <!-- ---------- 显示设置 ---------- -->
+      <div class="card">
+        <h2>显示设置</h2>
+
+        <div class="settings">
+          <label class="switch">
+            <input type="checkbox" id="optCurve" checked>
+            <span>评估曲线</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="optBar" checked>
+            <span>局势条</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="optMoveEval" checked>
+            <span>着法评分</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="optArrow" checked>
+            <span>推荐走法箭头</span>
+          </label>
+        </div>
+
+        <div class="row">
+          <label class="hint">整局扫描深度
+            <select id="scanDepthSelect">
+              <option value="6">6 · 最快</option>
+              <option value="8">8</option>
+              <option value="10" selected>10 · 推荐</option>
+              <option value="12">12</option>
+              <option value="14">14 · 最慢</option>
+            </select>
+          </label>
+        </div>
+
+        <p class="hint setting-note" id="settingNote">
+          载入棋谱后，鳕鱼会把整盘棋逐个局面过一遍 —— 曲线、局势条和推荐走法箭头都由它算出来，
+          跟棋谱里有没有评注无关。「评估曲线」和「局势条」都关掉就退回手动模式，不再在后台整局扫描。<br>
+          「推荐走法箭头」在棋盘上标出引擎对这个局面的推荐着法。数据来自上面那轮扫描，
+          你翻到哪一步就跟着显示哪一步；如果你手动点过「让鳕鱼分析」，就用那份结果（深度更高，更可信）。
+          手动模式下没有扫描数据，这时它只在点过按钮之后才出现。<br>
+          「着法评分」单独管着法列表里那串小数字：关掉它，列表里清清爽爽，
+          只剩着法本身（棋谱自带的评分也一起藏起来）。<br>
+          这四个开关只决定「画不画」，管不着「算不算」；而「分析结果」面板永远是手动的 ——
+          只有你按了「🐟 让鳕鱼分析」，它才会出结论，也绝不会自己冒出来。
+        </p>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- type="module" 是关键：这样才能用 import 把几个文件串起来 -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

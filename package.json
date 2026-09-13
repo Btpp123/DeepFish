@@ -1,0 +1,24 @@
+{
+  "name": "deepfish",
+  "version": "0.1.0",
+  "description": "DeepFish：鳕鱼算棋 + DeepSeek 讲棋（A 版学习项目）",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node verify-pgn.js && node verify-timeline.js && node verify-engine.js && node verify-eval.js",
+    "test:llm": "node verify-llm.js",
+    "test:ui": "node verify-dom.js",
+    "test:all": "npm test && npm run test:llm && npm run test:ui",
+    "verify:live": "node verify-live.js",
+    "verify:key": "node verify-key-safety.js"
+  },
+  "dependencies": {
+    "chess.js": "^1.4.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
+  }
+}

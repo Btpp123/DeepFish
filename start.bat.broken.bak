@@ -1,0 +1,52 @@
+@echo off
+chcp 65001 >nul
+title DeepFish
+cd /d "%~dp0"
+
+rem ============================================================
+rem  DeepFish 一键启动
+rem  双击这个文件就行：它会起服务器，并在服务器就绪后自动打开浏览器。
+rem  ⚠️ 这个文件必须存成 CRLF 换行 + UTF-8 无 BOM ——
+rem     cmd.exe 读 LF 换行的批处理会解析错乱（踩过一次）。
+rem  ⚠️ 中文不要写进 if (...) 这种括号块里，同样会因为编码出问题。
+rem ============================================================
+
+echo.
+echo   ============================================
+echo     DeepFish   鳕鱼算棋 + DeepSeek 讲棋
+echo   ============================================
+echo.
+
+where node >nul 2>nul
+if errorlevel 1 goto nonode
+
+if not exist "node_modules" goto nomod
+
+echo   正在启动服务器，浏览器会在它就绪后自动打开……
+echo   这个黑窗口就是服务器本身 —— 关掉它等于停止服务器。
+echo.
+
+rem ---------- 等服务器真的能应答了再开浏览器 ----------
+rem 直接 start 浏览器的话，服务器可能还没起来，会看到一个"无法访问"。
+rem 下面这段 PowerShell 会一直戳 /api/health，通了才开页面；
+rem 20 秒还不通就放弃，那种情况多半是端口被占了，下一句 node 会报出来。
+start "" /b powershell -NoProfile -Command "for($i=0;$i -lt 40;$i++){try{if((Invoke-WebRequest http://127.0.0.1:3000/api/health -TimeoutSec 2 -UseBasicParsing).StatusCode -eq 200){Start-Process 'http://127.0.0.1:3000';break}}catch{};Start-Sleep -Milliseconds 500}"
+
+node src/server.js
+
+echo.
+echo   服务器已停止。按任意键关闭这个窗口。
+pause >nul
+exit /b 0
+
+:nonode
+echo   [X] 没有找到 Node.js —— 先装一个：https://nodejs.org/
+echo.
+pause
+exit /b 1
+
+:nomod
+echo   [X] 还没装依赖。先在项目目录里跑一次：npm install
+echo.
+pause
+exit /b 1

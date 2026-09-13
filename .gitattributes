@@ -1,0 +1,31 @@
+# ============================================================
+# .gitattributes —— 换行符的规矩
+#
+# 为什么需要这个文件？
+# Windows 上的 git 默认 core.autocrlf=true：**入库存 LF、检出转 CRLF**。
+# 于是任何人 git clone 下来，工作区里的文件全是 CRLF —— 包括
+# public/js/chess.js 那份副本。而 npm install 装出来的
+# node_modules/chess.js 是 LF。verify-pgn.js 的第 ⑦ 节是**按字节**
+# 比这两份的，于是新克隆的仓库一跑测试就红，而且看起来像是"副本拷错了"，
+# 根因其实在这儿。→ 所以下面把规矩写死，不依赖每个人本地的 git 配置。
+# ============================================================
+
+# 默认：一律当文本处理，统一存/取成 LF（跨平台一致）
+* text=auto eol=lf
+
+# ---------- 例外一：批处理必须是 CRLF ----------
+# cmd.exe 读 LF 换行的 .bat 会解析错乱（这个坑 start.bat 文件头写着）。
+# 这条必须放在上面那条之后 —— 更具体的规则后写、后生效。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# ---------- 例外二：chess.js 副本，一个字节都不许动 ----------
+# verify-pgn.js 第 ⑦ 节按字节比对它和 node_modules 里那份。
+# -text 表示"不做任何换行转换"，保证 checkout 出来的和存进去的完全一致。
+public/js/chess.js -text -diff
+
+# ---------- 二进制 ----------
+*.exe  binary
+*.zip  binary
+*.png  binary
+*.jpg  binary

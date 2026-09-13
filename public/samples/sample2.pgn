@@ -1,0 +1,14 @@
+[Event "对局训练"]
+[Site "国象联盟"]
+[Date "2026.09.07"]
+[Round "1"]
+[White "人类"]
+[Black "人类"]
+[Result "1-0"]
+[ECO "B00"]
+[Opening "王兵开局"]
+[Variation "王兵开局 尼姆佐维奇防御"]
+
+1. e4 Nc6 2. d4 d5 3. exd5 Qxd5 4. Nf3 Bg4 5. Be2 O-O-O 6. c4 Qh5 7. d5 Bxf3
+8. Bxf3 Qe5+ 9. Be3 Qxb2 10. O-O Qxa1 11. dxc6 Rxd1 12. cxb7+ Kb8 13. Rxd1 c6
+14. Bxc6 Kc7 15. Rd7+ Kxc6 16. b8=N# 1-0

@@ -1,0 +1,989 @@
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 22px;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  background: #1a1d21;
+  color: #e6e6e6;
+  line-height: 1.6;
+}
+
+header { margin-bottom: 20px; }
+h1 { margin: 0; font-size: 25px; }
+h2 { margin: 0 0 12px; font-size: 16px; color: #7fd1b9; }
+.subtitle { margin: 4px 0 0; color: #8a8f98; font-size: 13px; }
+
+main {
+  display: grid;
+  /* ⚠️ 右栏用 minmax(0, 1fr)，左栏下面有明确的宽度上限（见 .left）——
+     不然左栏里冒出一句很长的话（棋盘下面那行提示、棋谱评注都可能是长句），
+     会把 auto 那一栏**撑宽**，右栏就被挤扁了。 */
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 22px;
+  max-width: 1180px;
+  align-items: start;
+}
+@media (max-width: 880px) {
+  main { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+   棋盘左边那一块的整体尺寸
+   --board-size 就是棋盘的边长，下面所有东西的宽度都由它推出来。
+   想改棋盘大小，只改这一行就行。
+   ============================================================ */
+.left {
+  /* 棋盘大小：既跟着窗口宽度缩，也**跟着窗口高度缩**。
+     只按宽度定时，笔记本那种"宽但不高"的窗口会把翻页按钮顶到折叠线以下
+     （用户报的：开了曲线之后，点「下一步」「让鳕鱼分析」都得先往下滚一点）。
+     66vh 这一项就是为了这个 —— 1080p 上它不起作用（480 还是最小），
+     屏幕矮的时候它会主动把棋盘收小。 */
+  --board-size: min(480px, 76vw, 66vh);
+  --bar-w: 30px;                 /* 局势条的宽度 */
+  --gap: 10px;
+  /* 棋盘 + 条 + 间距 = 下面几块（曲线、状态栏、按钮）的统一宽度 */
+  --panel-w: calc(var(--board-size) + var(--bar-w) + var(--gap));
+  /* 宽度**钉死**在棋盘那一列上：任何一句长文案都不许把这一栏撑宽。
+     文字该换行就换行（配合下面那几处的 overflow-wrap）。 */
+  width: var(--panel-w);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.board-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--gap);
+}
+
+/* ============================================================
+   局势条
+   底下一半深色（黑方），上面按优势填白。
+   白色块有多高，就是白方优势有多大。
+   ============================================================ */
+.evalbar {
+  position: relative;
+  flex: none;
+  width: var(--bar-w);
+  background: #26282c;           /* 深色 = 黑方那一侧 */
+  border-radius: 5px;
+  overflow: hidden;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .45);
+}
+.evalbar[hidden] { display: none; }
+
+.evalbar-white {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 50%;
+  background: #e9edf1;
+  transition: height .32s cubic-bezier(.3, .7, .4, 1);
+}
+
+/* 中线，表示「完全均势」的位置 */
+.evalbar-mid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: rgba(240, 210, 100, .7);
+}
+
+.evalbar-score {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  transform: translateX(-50%);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, .66);
+  color: #fff;
+  white-space: nowrap;
+}
+.evalbar-score[data-side="w"] { color: #b6f0dd; }
+.evalbar-score[data-side="b"] { color: #f0b6b6; }
+
+/* ============================================================
+   棋盘本体
+   --sq 就是一个格子的边长，由 --board-size 除以 8 得到。
+   ============================================================ */
+.board {
+  --sq: calc(var(--board-size) / 8);
+  position: relative;              /* 三层都靠它来定位 */
+  flex: none;
+  width:  var(--board-size);
+  height: var(--board-size);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .45);
+  user-select: none;
+}
+
+/* 第 1 层：格子。建一次就再也不动了 */
+.board-squares {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows:    repeat(8, 1fr);
+  z-index: 1;
+}
+
+/* 第 2 层：棋子。只用改 transform 来移动 */
+.board-pieces {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* 箭头层：盖在棋子上面（和 lichess 一样），但不能挡住鼠标 */
+.board-arrows {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.sq {
+  position: relative;
+  font-size: calc(var(--sq) * 0.76);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.sq.light { background: #ebecd0; }
+.sq.dark  { background: #779556; }
+
+/* 刚走的那一步：从哪、到哪，盖一层半透明的黄 */
+.sq.hl-from::after,
+.sq.hl-to::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 213, 0, .40);
+  pointer-events: none;
+}
+
+/* ============================================================
+   棋子
+   .piece-wrap 负责「在哪一格」—— 用 transform 平移，带过渡，于是就会滑
+   .piece      负责「长什么样」—— 颜色、字形、被吃时缩小淡出
+   两层分开，是因为 transform 只有一个：位置和缩放抢同一个属性会打架。
+   ============================================================ */
+.piece-wrap {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 12.5%;                    /* 正好一格 */
+  height: 12.5%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--sq) * 0.76);
+  line-height: 1;
+  transition: transform 190ms cubic-bezier(.25, .7, .35, 1);
+  will-change: transform;
+}
+
+/* 关掉动画。跨多步跳转时用（否则满盘棋子同时乱飞） */
+.board-pieces.no-anim .piece-wrap { transition: none; }
+
+.piece {
+  position: relative;
+  transition: opacity 170ms ease, transform 170ms ease;
+}
+
+/* 被吃掉：缩小淡出，而不是"啪"一下消失 */
+.piece-wrap.gone .piece {
+  opacity: 0;
+  transform: scale(.3);
+}
+
+.piece.w {
+  color: #ffffff;
+  text-shadow:
+    -1px -1px 0 #2b2b2b,  1px -1px 0 #2b2b2b,
+    -1px  1px 0 #2b2b2b,  1px  1px 0 #2b2b2b;
+}
+.piece.b {
+  color: #2b2b2b;
+  text-shadow:
+    -1px -1px 0 #dcdcdc,  1px -1px 0 #dcdcdc,
+    -1px  1px 0 #dcdcdc,  1px  1px 0 #dcdcdc;
+}
+
+/* ============================================================
+   「吃掉了什么」那一栏（棋盘正下方）
+   纯子力账：只把棋盘上发生过的事记下来，和引擎评分无关。
+   棋子字形和棋盘上那份是同一个（board.js 的 PIECE_GLYPH），
+   颜色规则也共用上面 .piece.w / .piece.b 那两条。
+   ============================================================ */
+.ledger {
+  width: var(--panel-w);
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: #8a8f98;
+}
+.ledger-row { display: flex; align-items: center; gap: 6px; min-height: 18px; }
+.ledger-tag { flex: 0 0 auto; }
+.ledger-pieces { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; line-height: 1; }
+/* 和棋盘上的子一个字体大小量级，但要小得多 —— 这里只是"记账" */
+.ledger .cap { font-size: 15px; line-height: 1; }
+.cap.w { color: #ffffff; text-shadow: -1px -1px 0 #2b2b2b, 1px -1px 0 #2b2b2b, -1px 1px 0 #2b2b2b, 1px 1px 0 #2b2b2b; }
+.cap.b { color: #2b2b2b; text-shadow: -1px -1px 0 #dcdcdc, 1px -1px 0 #dcdcdc, -1px 1px 0 #dcdcdc, 1px 1px 0 #dcdcdc; }
+.ledger-empty { color: #5a6069; }
+/* 吃子赚了的那一方，把分差标出来（只标正的那边，另一边留空） */
+.ledger-plus { margin-left: 4px; color: #f0d264; font-weight: 700; }
+
+/* 格子边缘的 a~h、1~8 坐标 */
+.coord {
+  position: absolute;
+  font-size: calc(var(--sq) * 0.21);
+  font-weight: 700;
+  z-index: 1;
+}
+.coord-rank { top: 2px; left: 3px; }
+.coord-file { bottom: 1px; right: 4px; }
+.sq.light .coord { color: #779556; }
+.sq.dark  .coord { color: #ebecd0; }
+
+/* ============================================================
+   棋盘下方的状态和翻页按钮
+   ============================================================ */
+.under-board {
+  width: var(--panel-w);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+  gap: 10px;
+}
+.status  { font-size: 15px; font-weight: 600; color: #f0d264; }
+.counter { font-size: 12px; color: #8a8f98; }
+.under-right { display: flex; align-items: center; gap: 8px; }
+
+button.tiny { padding: 3px 9px; font-size: 11px; }
+
+/* 当前这一步的评注（棋谱自带的话）。没有就整块藏起来，不占地方。 */
+.move-note {
+  width: var(--panel-w);
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #a8d5c6;
+  background: #1f2429;
+  border-left: 3px solid #2f7d6a;
+  border-radius: 5px;
+  padding: 7px 10px;
+  overflow-wrap: anywhere;
+}
+.move-note.empty { display: none; }
+
+.nav {
+  width: var(--panel-w);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* ============================================================
+   手动分析那一行（就在翻页按钮下面）
+   「让鳕鱼分析」是左栏里唯一会花几秒钟的按钮，
+   所以它单独占一行、还要够大 —— 翻完页手不用挪地方就能再点一次。
+   ============================================================ */
+.analyze-row {
+  width: var(--panel-w);
+  display: flex;
+  flex-wrap: wrap;         /* 窗口特别窄时让「思考深度」掉到第二行，而不是把按钮挤扁 */
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.analyze-row #btnAnalyze {
+  flex: 1;                 /* 撑满剩下的宽度，比右边那个下拉框好按得多 */
+  min-width: 0;
+  padding: 10px 14px;
+  font-size: 14px;
+}
+
+/* ============================================================
+   评估曲线
+   横轴 = 步数，上半是白优、下半是黑优。
+   白方占优的地方会填出浅色面积 —— 面积越大，白方越优。
+   ============================================================ */
+.eval-panel {
+  width: var(--panel-w);
+  margin-top: 12px;
+  background: #24282e;
+  border: 1px solid #333941;
+  border-radius: 8px;
+  padding: 8px 10px 7px;
+}
+.eval-panel[hidden] { display: none; }
+
+.eval-panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: #6f757d;
+}
+.eval-panel-title { color: #7fd1b9; font-size: 12px; font-weight: 600; }
+.eval-progress { color: #f0c674; }
+.eval-progress:empty { display: none; }
+.eval-legend { margin-left: auto; }
+.eval-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 3px;
+  vertical-align: middle;
+}
+.eval-legend .lg-white { background: #dfe4ea; }
+.eval-legend .lg-black { background: #1b1f24; border: 1px solid #3a4048; }
+
+.eval-curve { height: 92px; }
+.eval-curve-svg { width: 100%; height: 100%; display: block; cursor: pointer; }
+
+/* ============================================================
+   显示设置
+   ============================================================ */
+.settings { display: flex; flex-wrap: wrap; gap: 16px; }
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.switch input {
+  width: 15px;
+  height: 15px;
+  accent-color: #2f7d6a;
+  cursor: pointer;
+  margin: 0;
+}
+.setting-note { margin: 10px 0 0; line-height: 1.7; }
+
+/* ============================================================
+   右边的卡片
+   ============================================================ */
+.right { display: flex; flex-direction: column; gap: 16px; }
+
+.card {
+  background: #24282e;
+  border: 1px solid #333941;
+  border-radius: 10px;
+  padding: 16px;
+}
+.card.muted { opacity: .55; border-style: dashed; }
+
+.tag {
+  font-size: 11px;
+  background: #3a4048;
+  color: #9aa3ad;
+  padding: 2px 8px;
+  border-radius: 10px;
+  vertical-align: middle;
+  margin-left: 6px;
+  font-weight: normal;
+}
+
+textarea {
+  width: 100%;
+  background: #1a1d21;
+  border: 1px solid #3a4048;
+  border-radius: 6px;
+  color: #cfe8dd;
+  padding: 10px;
+  font-size: 13px;
+  font-family: Consolas, "Courier New", monospace;
+  resize: vertical;
+}
+textarea:focus { outline: none; border-color: #2f7d6a; }
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.hint { font-size: 12px; color: #8a8f98; }
+
+button {
+  background: #3a4048;
+  color: #dfe4ea;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s;
+}
+button:hover:not(:disabled) { background: #474e57; }
+button:disabled { opacity: .35; cursor: not-allowed; }
+button.primary { background: #2f7d6a; color: #fff; }
+button.primary:hover { background: #38907a; }
+button.ghost { background: transparent; border: 1px solid #3f464e; color: #9fb3ab; padding: 6px 10px; }
+button.ghost:hover { background: #2c3238; }
+
+/* ============================================================
+   提示消息
+   ============================================================ */
+.message { margin-top: 10px; font-size: 13px; min-height: 20px; }
+.message.ok    { color: #7fd1b9; }
+.message.error { color: #f08a8a; }
+.message.warn  { color: #f0c674; }
+
+/* ============================================================
+   着法列表
+   ============================================================ */
+/* 着法列表。
+   这是翻页时一直在看的地方，所以给它一个"够看一屏"的高度（随窗口伸缩）。
+   ⚠️ 高度别贪大：它一长，右栏下面那张「分析结果」卡片（连同「🤖 让 DeepSeek
+   讲讲」按钮）就被顶到屏幕外面去了，想点它得先滚一段。
+   早先这里是 min(58vh, 520px)，实测正好把按钮顶出去。
+   另外用 overscroll-behavior 挡住「滚到边界后把滚动传给整页」——
+   否则在列表里滚到头，页面会跟着动。 */
+.moves-wrap {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  max-height: min(30vh, 260px);
+  border: 1px solid #333941;
+  border-radius: 6px;
+}
+
+table.moves {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+table.moves thead th {
+  position: sticky;
+  top: 0;
+  background: #2c3238;
+  color: #8a8f98;
+  font-size: 12px;
+  font-weight: normal;
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid #3a4048;
+}
+.move-no {
+  width: 44px;
+  color: #6f757d;
+  font-size: 12px;
+  padding: 5px 8px;
+}
+.move-cell {
+  padding: 5px 8px;
+  cursor: pointer;
+  font-family: Consolas, "Courier New", monospace;
+  border-radius: 4px;
+  transition: background .1s;
+}
+.move-cell:hover:not(.active) { background: #2f353c; }
+.move-cell.active {
+  background: #f0d264;
+  color: #1a1d21;
+  font-weight: 700;
+}
+
+/* ============================================================
+   「引擎认为的次优选」—— 首选之外那几条候选，各带自己的后续
+   ============================================================ */
+.alts {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #333941;
+}
+.alts-head {
+  font-size: 12px;
+  color: #8a8f98;
+  margin-bottom: 6px;
+}
+.alt-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.alt-item {
+  background: #23282e;
+  border: 1px solid #313841;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.alt-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.alt-rank {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 50%;
+  background: #333a43;
+  color: #cfd4da;
+  font-size: 11px;
+}
+.alt-move {
+  font-family: Consolas, "Courier New", monospace;
+  font-weight: 600;
+  color: #e6e6e6;
+}
+.alt-anchor {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  color: #7f858d;
+}
+.alt-score { font-weight: 600; }
+.alt-score.w { color: #7fd1b9; }
+.alt-score.b { color: #f0a0a0; }
+.alt-score.eq { color: #8a8f98; }
+.alt-gap { font-size: 11px; color: #8a8f98; }
+.alt-pv { margin-top: 4px; }
+.alt-pv code {
+  display: block;
+  font-size: 12px;
+  color: #a8d5c6;
+  overflow-wrap: anywhere;
+}
+
+/* ============================================================
+   直接在棋盘上走棋：选中高亮 + 可落点
+   和「刚走的那一步」的 hl-from / hl-to 分开：那两个是"已经发生的"，
+   这两个是"你正在选的"，颜色必须能一眼分开。
+   ============================================================ */
+.sq.sel-src::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(240, 210, 100, .45);
+  pointer-events: none;
+}
+.sq.sel-target::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, rgba(30, 120, 90, .75) 0 18%, rgba(30, 120, 90, .18) 19% 100%);
+  pointer-events: none;
+}
+
+/* 棋盘下面那行提示：轮到谁走 / 选中了谁 / 能走哪几个格。
+   overflow-wrap: anywhere 是兜底 —— 万一以后又写出一句很长的文案，
+   它也只会在自己这一行里换行，不会把左边的栏撑宽、把右栏挤扁。 */
+.play-hint {
+  margin-top: 6px;
+  min-height: 18px;
+  font-size: 12px;
+  color: #8a8f98;
+  overflow-wrap: anywhere;
+}
+.play-hint.warn { color: #f0b6b6; }
+
+/* 升变选择 */
+.promo-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #2c3238;
+  border: 1px solid #3a4048;
+  border-radius: 6px;
+}
+.promo-picker[hidden] { display: none; }
+.promo-title { font-size: 13px; color: #cfd4da; }
+
+/* ============================================================
+   支线（你在棋盘上走的棋）
+   原棋谱一步不改，所以支线单独一块，挂在主线表格下面。
+   ============================================================ */
+.branch-block {
+  margin-top: 10px;
+  border-top: 1px dashed #3a4048;
+  padding-top: 8px;
+}
+.branch-block[hidden] { display: none; }
+
+.branch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.branch-title { font-size: 13px; color: #7fd1b9; font-weight: 600; }
+
+.branch-list { display: flex; flex-direction: column; gap: 8px; }
+
+.branch-item {
+  border: 1px solid #333941;
+  border-radius: 6px;
+  padding: 4px 6px 6px;
+}
+.branch-item.active { border-color: #7fd1b9; }
+
+.branch-head {
+  font-size: 12px;
+  color: #6f757d;
+  padding: 2px 4px 4px;
+}
+.branch-head b { color: #cfd4da; font-weight: 600; }
+
+table.moves.branch-table { font-size: 13px; }
+table.moves.branch-table .move-cell { color: #cfd4da; }
+table.moves.branch-table .move-cell.active { color: #1a1d21; }
+
+/* 主线上"有支线从这里接出去"的标记 */
+.move-cell.has-branch { position: relative; }
+.move-cell.has-branch::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #7fd1b9;
+}
+
+/* ============================================================
+   导出面板 与 换盘前的拦一下
+   ============================================================ */
+.export-panel {
+  margin-top: 10px;
+  padding: 10px;
+  background: #262b31;
+  border: 1px solid #3a4048;
+  border-radius: 6px;
+}
+.export-panel[hidden] { display: none; }
+.export-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.export-text {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  background: #1b1f24;
+  color: #cfd4da;
+  border: 1px solid #3a4048;
+  border-radius: 5px;
+  padding: 8px;
+  resize: vertical;
+}
+
+.load-guard {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #3a3230;
+  border: 1px solid #6b5148;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #f0d7b6;
+}
+.load-guard[hidden] { display: none; }
+.load-guard .row { margin-top: 6px; }
+
+/* ============================================================
+   着法列表里的「评注标记」
+   小圆点 = 棋谱里给这一步的判评（漏着/错着/不精确）
+   ============================================================ */
+.move-cell::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+  background: transparent;   /* 没评注就是空的，但位置留着，免得各行缩进参差 */
+}
+.move-cell.q-blunder::before    { background: #e05c5c; }
+.move-cell.q-mistake::before    { background: #e8933a; }
+.move-cell.q-inaccuracy::before { background: #d8c04a; }
+.move-cell.q-good::before       { background: #5cb87f; }
+.move-cell.q-brilliant::before  { background: #4aa8e0; }
+.move-cell.q-book::before       { background: #6f757d; }
+
+/* 用 :not(.active) 保证「当前这一步」的黄底不被盖掉 */
+.move-cell.q-blunder:not(.active)    { background: rgba(224, 92, 92, .15); }
+.move-cell.q-mistake:not(.active)    { background: rgba(232, 147, 58, .12); }
+.move-cell.q-inaccuracy:not(.active) { background: rgba(216, 192, 74, .10); }
+
+/* 着法后面的评分。
+   两种来源：鳕鱼刚才实时算的（.own，亮一点），或者棋谱里带的（暗一点）。
+   hover 上去能看到来源。 */
+.move-cell .mv-eval {
+  font-size: 11px;
+  margin-left: 6px;
+  opacity: .6;
+}
+.move-cell .mv-eval.own { opacity: 1; font-weight: 600; }
+.move-cell .mv-eval.w  { color: #7fd1b9; }
+.move-cell .mv-eval.b  { color: #f0a0a0; }
+.move-cell .mv-eval.eq { color: #8a8f98; }
+.move-cell .mv-eval[hidden] { display: none; }
+
+/* 示例按钮里的"测试样例"稍微突出一点（那盘 real 对局最能试出功能） */
+button.ghost.hl { border-color: #2f7d6a; color: #7fd1b9; }
+
+/* ============================================================
+   引擎分析面板
+   ============================================================ */
+.tag.ok  { background: #244b41; color: #7fd1b9; }
+.tag.bad { background: #4d2b2b; color: #f0a0a0; }
+
+select {
+  background: #1a1d21;
+  color: #dfe4ea;
+  border: 1px solid #3a4048;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  margin-left: 4px;
+}
+select:focus { outline: none; border-color: #2f7d6a; }
+
+.analysis { margin-top: 12px; font-size: 13px; }
+.analysis .msg-line { margin: 0; }
+.analysis .msg-line.bad { color: #f08a8a; }
+
+/* 「鳕鱼建议走」那一块 */
+.best {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: #1f2429;
+  border: 1px solid #3a4048;
+  border-left: 3px solid #e8933a;
+  border-radius: 6px;
+}
+.best-label { font-size: 12px; color: #8a8f98; }
+.best-move  { font-size: 22px; font-weight: 700; color: #f0c674; font-family: Consolas, monospace; }
+.best-uci   { font-size: 11px; color: #6f757d; }
+
+/* 评分。正数 = 白方占优（我们已经在后端统一翻转过视角了） */
+.eval {
+  margin-top: 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.eval-num {
+  font-family: Consolas, monospace;
+  font-size: 17px;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 5px;
+}
+.eval.w  .eval-num { background: #244b41; color: #7fd1b9; }
+.eval.b  .eval-num { background: #4d2b2b; color: #f0a0a0; }
+.eval.eq .eval-num { background: #333941; color: #c9d1d9; }
+.eval-label { font-size: 12px; color: #8a8f98; }
+
+/* 引擎预想的后续变化 */
+.pv { margin-top: 10px; }
+.pv-label { font-size: 11px; color: #6f757d; display: block; margin-bottom: 3px; }
+.pv code {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: #a8d5c6;
+  background: #1a1d21;
+  border-radius: 5px;
+  padding: 7px 9px;
+  word-break: break-word;
+}
+
+/* 引擎跑分 */
+.stats {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: #6f757d;
+}
+
+/* ============================================================
+   DeepSeek 讲解
+   它挂在「分析结果」卡片内部的下半截，用一条虚线和鳕鱼的结果隔开 ——
+   上面是"算出来的事实"，下面是"讲出来的人话"。
+
+   配色上刻意偏冷（蓝青），跟鳕鱼那边的金色区分开：
+   一眼能看出这段是谁说的，不用去看标题。
+   ============================================================ */
+.coach {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed #2f353d;
+}
+
+.coach-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.coach-btn {
+  flex: 1;                     /* 撑满，它和「让鳕鱼分析」一样是个要等几秒的按钮 */
+  padding: 9px 12px;
+  font-size: 13px;
+}
+
+.coach-body { margin-top: 10px; }
+.coach-body:empty { margin-top: 0; }
+
+/* 讲解正文 */
+.coach-text {
+  font-size: 13px;
+  line-height: 1.75;
+  color: #dfe4ea;
+  background: #1b2129;
+  border-left: 3px solid #4a7fa5;
+  border-radius: 0 6px 6px 0;
+  padding: 11px 13px;
+}
+.coach-text p { margin: 0 0 9px; }
+.coach-text p:last-child { margin-bottom: 0; }
+.coach-text ul { margin: 0 0 9px; padding-left: 20px; }
+.coach-text ul:last-child { margin-bottom: 0; }
+.coach-text li { margin: 3px 0; }
+.coach-text b { color: #9ecbff; }
+.coach-text code {
+  font-size: 12px;
+  background: #2a323c;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* 底部那行小字：模型名、花了多久、用了多少 token */
+.coach-foot {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: #6f757d;
+}
+
+/* 出错时那个折叠起来的「技术细节」 */
+.coach-detail { margin-top: 8px; font-size: 12px; }
+.coach-detail summary { color: #6f757d; cursor: pointer; }
+.coach-detail code {
+  display: block;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: #c9a0a0;
+  background: #1a1d21;
+  border-radius: 5px;
+  padding: 7px 9px;
+  word-break: break-word;
+}
+
+/* 提示文字里提到的 .env、DEEPSEEK_API_KEY */
+.coach-body .hint code {
+  font-size: 11.5px;
+  color: #9ecbff;
+  background: #232a33;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* ============================================================
+   讲解上面那条「鳕鱼的事实」
+   ============================================================
+   用户要的是**对照**：鳕鱼算出「该走 Nf3、评分 +0.35」这么个结论，
+   然后请 DeepSeek 讲讲为什么。所以数字坐在人话上面，顺序不能反 ——
+   和「分析结果」卡片里"鳕鱼在上、DeepSeek 在下"是同一个道理。
+
+   左边那条金线沿用鳕鱼那一侧的颜色，和下面蓝色的讲解正文分开：
+   一眼能看出哪段是算出来的、哪段是讲出来的。 */
+.coach-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 9px;
+  padding: 7px 10px;
+  background: #1f2429;
+  border: 1px solid #3a4048;
+  border-left: 3px solid #e8933a;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.coach-facts .cf-tag { color: #8a8f98; }
+.coach-facts .cf-move {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 15px;
+  font-weight: 700;
+  color: #f0c674;
+}
+.coach-facts .cf-score {
+  font-family: Consolas, "Courier New", monospace;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 4px;
+}
+.coach-facts .cf-score.w  { background: #244b41; color: #7fd1b9; }
+.coach-facts .cf-score.b  { background: #4d2b2b; color: #f0a0a0; }
+.coach-facts .cf-score.eq { background: #333941; color: #c9d1d9; }
+.coach-facts .cf-note  { color: #8a8f98; }
+/* 「本该走 Nc3」—— 走这一步之前引擎的建议，和"现在的建议"是两回事，
+   所以给个虚线框把它和前面那组数字隔开，免得看成一回事。 */
+.coach-facts .cf-was {
+  color: #9aa3ad;
+  border-left: 1px dashed #3f464e;
+  padding-left: 9px;
+}
+.coach-facts .cf-was b {
+  color: #f0c674;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+}
+/* 他走的正好是引擎首选 —— 这不是批评，配色上就该是"绿"的，不是"黄"的 */
+.coach-facts .cf-was.same { color: #6f9e8c; border-left-color: #2f7d6a; }
+.coach-facts .cf-was.same b { color: #7fd1b9; }
+.coach-facts .cf-swing { color: #6f757d; margin-left: auto; }
+
+/* 「这次没拿到鳕鱼的数据」那一段说明，跟正文拉开一点距离 */
+.coach-nofacts { margin: 0 0 9px; }
